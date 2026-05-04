@@ -1,0 +1,13 @@
+# Data artifacts
+pagecounts-20160101-000000_parsed.out.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spark/Java logs
+*.log
