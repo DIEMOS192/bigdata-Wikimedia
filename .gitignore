@@ -1,5 +1,6 @@
 # Data artifacts
 pagecounts-20160101-000000_parsed.out.zip
+pagecounts-20160101-000000_parsed.out/
 
 # Python
 __pycache__/
