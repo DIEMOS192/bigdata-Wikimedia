@@ -11,3 +11,6 @@ Thumbs.db
 
 # Spark/Java logs
 *.log
+
+.venv/
+.vscode/

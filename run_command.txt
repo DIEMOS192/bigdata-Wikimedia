@@ -1,0 +1,1 @@
+python spark_app.py --input pagecounts-20160101-000000_parsed.out/pagecounts-20160101-000000_parsed.out
