@@ -38,59 +38,69 @@ def normalize_terms(title: str) -> Iterator[str]:
 # --- Map-reduce style implementations ---
 
 def mr_page_size_stats(rdd) -> Tuple[int, int, float]:
-    sizes = rdd.map(lambda x: x[3])
-    min_v, max_v, sum_v, count_v = sizes.aggregate(
-        (None, None, 0, 0),
-        lambda acc, v: (
-            v if acc[0] is None or v < acc[0] else acc[0],
-            v if acc[1] is None or v > acc[1] else acc[1],
-            acc[2] + v,
-            acc[3] + 1,
-        ),
-        lambda a, b: (
-            b[0] if a[0] is None or (b[0] is not None and b[0] < a[0]) else a[0],
-            b[1] if a[1] is None or (b[1] is not None and b[1] > a[1]) else a[1],
-            a[2] + b[2],
-            a[3] + b[3],
-        ),
+    sizes = rdd.map(lambda record: record[3])
+    
+    def seq_op(acc, val):
+        min_v, max_v, sum_v, count = acc
+        new_min = val if min_v is None else min(min_v, val)
+        new_max = val if max_v is None else max(max_v, val)
+        return (new_min, new_max, sum_v + val, count + 1)
+        
+    def comb_op(acc1, acc2):
+        min1, max1, sum1, count1 = acc1
+        min2, max2, sum2, count2 = acc2
+        
+        if min1 is None: new_min = min2
+        elif min2 is None: new_min = min1
+        else: new_min = min(min1, min2)
+            
+        if max1 is None: new_max = max2
+        elif max2 is None: new_max = max1
+        else: new_max = max(max1, max2)
+            
+        return (new_min, new_max, sum1 + sum2, count1 + count2)
+
+    min_val, max_val, total_sum, total_count = sizes.aggregate(
+        (None, None, 0, 0), seq_op, comb_op
     )
-    avg_v = (sum_v / count_v) if count_v else 0.0
-    return int(min_v), int(max_v), float(avg_v)
+    
+    avg_val = (total_sum / total_count) if total_count > 0 else 0.0
+    return int(min_val or 0), int(max_val or 0), float(avg_val)
 
 
 def mr_image_counts(rdd) -> Tuple[int, int]:
-    def is_image(title: str) -> bool:
-        low = title.lower()
-        return low.endswith(IMAGE_EXTENSIONS)
-
-    images = rdd.filter(lambda x: is_image(x[1]))
+    images = rdd.filter(lambda record: record[1].lower().endswith(IMAGE_EXTENSIONS))
+    images.cache()
+    
     total_images = images.count()
-    non_en_images = images.filter(lambda x: x[0] != "en").count()
+    non_en_images = images.filter(lambda record: record[0] != "en").count()
+    
+    images.unpersist()
     return int(total_images), int(non_en_images)
 
 
 def mr_top_terms(rdd) -> List[Tuple[str, int]]:
     return (
-        rdd.flatMap(lambda x: normalize_terms(x[1]))
-        .map(lambda t: (t, 1))
+        rdd.flatMap(lambda record: normalize_terms(record[1]))
+        .map(lambda term: (term, 1))
         .reduceByKey(lambda a, b: a + b)
-        .takeOrdered(10, key=lambda x: -x[1])
+        .takeOrdered(10, key=lambda item: -item[1])
     )
 
 
 def mr_top_projects(rdd) -> List[Tuple[str, int]]:
     return (
-        rdd.map(lambda x: (x[0], x[2]))
+        rdd.map(lambda record: (record[0], record[2]))
         .reduceByKey(lambda a, b: a + b)
-        .takeOrdered(5, key=lambda x: -x[1])
+        .takeOrdered(5, key=lambda item: -item[1])
     )
 
 
 def mr_top_title_per_project(rdd) -> List[Tuple[str, str, int]]:
     return (
-        rdd.map(lambda x: (x[0], (x[1], x[2])))
+        rdd.map(lambda record: (record[0], (record[1], record[2])))
         .reduceByKey(lambda a, b: a if a[1] >= b[1] else b)
-        .map(lambda x: (x[0], x[1][0], x[1][1]))
+        .map(lambda item: (item[0], item[1][0], item[1][1]))
         .collect()
     )
 
@@ -98,99 +108,66 @@ def mr_top_title_per_project(rdd) -> List[Tuple[str, str, int]]:
 # --- Loop-based implementations (partition-local loops) ---
 
 def loop_page_size_stats(rdd) -> Tuple[int, int, float]:
-    def part_stats(it: Iterable[Record]) -> Iterator[Tuple[int, int, int, int]]:
-        min_v = None
-        max_v = None
-        sum_v = 0
-        count_v = 0
-        for _, _, _, size in it:
-            if min_v is None or size < min_v:
-                min_v = size
-            if max_v is None or size > max_v:
-                max_v = size
-            sum_v += size
-            count_v += 1
-        if count_v == 0:
-            return iter(())
-        return iter([(min_v, max_v, sum_v, count_v)])
+    min_val = max_val = None
+    total_sum = total_count = 0
 
-    partials = rdd.mapPartitions(part_stats)
+    for *_, size in rdd.toLocalIterator():
+        if min_val is None or size < min_val:
+            min_val = size
+        if max_val is None or size > max_val:
+            max_val = size
+        total_sum += size
+        total_count += 1
 
-    def combine(a, b):
-        return (
-            b[0] if a[0] is None or b[0] < a[0] else a[0],
-            b[1] if a[1] is None or b[1] > a[1] else a[1],
-            a[2] + b[2],
-            a[3] + b[3],
-        )
-
-    min_v, max_v, sum_v, count_v = partials.reduce(combine)
-    avg_v = (sum_v / count_v) if count_v else 0.0
-    return int(min_v), int(max_v), float(avg_v)
+    avg_val = (total_sum / total_count) if total_count > 0 else 0.0
+    return int(min_val or 0), int(max_val or 0), float(avg_val)
 
 
 def loop_image_counts(rdd) -> Tuple[int, int]:
-    def part_counts(it: Iterable[Record]) -> Iterator[Tuple[int, int]]:
-        total = 0
-        non_en = 0
-        for project, title, _, _ in it:
-            low = title.lower()
-            if low.endswith(IMAGE_EXTENSIONS):
-                total += 1
-                if project != "en":
-                    non_en += 1
-        if total == 0 and non_en == 0:
-            return iter(())
-        return iter([(total, non_en)])
+    total_images = non_en_images = 0
 
-    partials = rdd.mapPartitions(part_counts)
-    total, non_en = partials.reduce(lambda a, b: (a[0] + b[0], a[1] + b[1]))
-    return int(total), int(non_en)
+    for project, title, *_ in rdd.toLocalIterator():
+        if title.lower().endswith(IMAGE_EXTENSIONS):
+            total_images += 1
+            if project != "en":
+                non_en_images += 1
+
+    return int(total_images), int(non_en_images)
 
 
 def loop_top_terms(rdd) -> List[Tuple[str, int]]:
-    def part_counts(it: Iterable[Record]) -> Iterator[Tuple[str, int]]:
-        counts: Dict[str, int] = {}
-        for _, title, _, _ in it:
-            for term in normalize_terms(title):
-                counts[term] = counts.get(term, 0) + 1
-        return iter(counts.items())
+    term_counts: Dict[str, int] = {}
+    
+    for _, title, *_ in rdd.toLocalIterator():
+        for term in normalize_terms(title):
+            term_counts[term] = term_counts.get(term, 0) + 1
 
-    return (
-        rdd.mapPartitions(part_counts)
-        .reduceByKey(lambda a, b: a + b)
-        .takeOrdered(10, key=lambda x: -x[1])
-    )
+    # Sort descending by count and return top 10
+    sorted_terms = sorted(term_counts.items(), key=lambda item: -item[1])
+    return sorted_terms[:10]
 
 
 def loop_top_projects(rdd) -> List[Tuple[str, int]]:
-    def part_counts(it: Iterable[Record]) -> Iterator[Tuple[str, int]]:
-        counts: Dict[str, int] = {}
-        for project, _, hits, _ in it:
-            counts[project] = counts.get(project, 0) + hits
-        return iter(counts.items())
+    project_counts: Dict[str, int] = {}
 
-    return (
-        rdd.mapPartitions(part_counts)
-        .reduceByKey(lambda a, b: a + b)
-        .takeOrdered(5, key=lambda x: -x[1])
-    )
+    for project, _, hits, _ in rdd.toLocalIterator():
+        project_counts[project] = project_counts.get(project, 0) + hits
+
+    # Sort descending by hits and return top 5
+    sorted_projects = sorted(project_counts.items(), key=lambda item: -item[1])
+    return sorted_projects[:5]
 
 
 def loop_top_title_per_project_rdd(rdd):
-    def part_best(it: Iterable[Record]) -> Iterator[Tuple[str, Tuple[str, int]]]:
-        best: Dict[str, Tuple[str, int]] = {}
-        for project, title, hits, _ in it:
-            current = best.get(project)
-            if current is None or hits > current[1]:
-                best[project] = (title, hits)
-        return iter(best.items())
+    best: Dict[str, Tuple[str, int]] = {}
 
-    return (
-        rdd.mapPartitions(part_best)
-        .reduceByKey(lambda a, b: a if a[1] >= b[1] else b)
-        .map(lambda x: (x[0], x[1][0], x[1][1]))
-    )
+    for project, title, hits, _ in rdd.toLocalIterator():
+        current = best.get(project)
+        if current is None or hits > current[1]:
+            best[project] = (title, hits)
+
+    result_list = [(project, title, hits) for project, (title, hits) in best.items()]
+    return sorted(result_list, key=lambda x: x[0])
 
 
 def time_call(fn, *args):
@@ -236,7 +213,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Wikimedia pageviews analysis with PySpark")
     parser.add_argument(
         "--input",
-        default="pagecounts-20160101-000000_parsed.out/pagecounts-20160101-000000_parsed.out",
+        default="pagecounts-20160101-000000_parsed.out",
         help="Path to the pageviews data file",
     )
     parser.add_argument(
@@ -302,18 +279,13 @@ def main() -> None:
     (mr_top_title, mr_time) = time_call(mr_top_title_per_project, rdd)
     mr_top_title_sorted = sorted(mr_top_title, key=lambda x: x[0])
 
-    loop_top_title_rdd = loop_top_title_per_project_rdd(rdd)
-    loop_out_dir = "results_q5_loop"
-    if os.path.exists(loop_out_dir):
-        shutil.rmtree(loop_out_dir)
     start = time.perf_counter()
-    loop_top_title_rdd.saveAsTextFile(loop_out_dir)
+    loop_top_title_results = loop_top_title_per_project_rdd(rdd)
     loop_time = time.perf_counter() - start
-    loop_lines: List[str] = []
-    for name in sorted(os.listdir(loop_out_dir)):
-        if name.startswith("part-"):
-            with open(os.path.join(loop_out_dir, name), "r", encoding="utf-8") as f:
-                loop_lines.extend([line.rstrip("\n") for line in f])
+    
+    # Format exactly like Spark's textFile would output
+    loop_lines = [f"{item}" for item in loop_top_title_results]
+
     loop_top_title_text = "\n".join(loop_lines)
     results["Q5_top_title"] = {
         "title": "Q5: Top page title per project by hits",
