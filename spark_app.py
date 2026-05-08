@@ -1,9 +1,7 @@
 import argparse
-import os
 import re
-import shutil
 import time
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from pyspark import SparkConf, SparkContext
 
@@ -33,6 +31,14 @@ def normalize_terms(title: str) -> Iterator[str]:
         cleaned = TERM_CLEAN_RE.sub("", raw.lower())
         if cleaned:
             yield cleaned
+
+
+def iter_records_from_file(input_path: str):
+    with open(input_path, "r", encoding="utf-8") as f:
+        for line in f:
+            record = parse_line(line)
+            if record is not None:
+                yield record
 
 
 # --- Map-reduce style implementations ---
@@ -105,13 +111,13 @@ def mr_top_title_per_project(rdd) -> List[Tuple[str, str, int]]:
     )
 
 
-# --- Loop-based implementations (partition-local loops) ---
+# --- Pure Python loop-based implementations ---
 
-def loop_page_size_stats(rdd) -> Tuple[int, int, float]:
+def loop_page_size_stats(input_path: str) -> Tuple[int, int, float]:
     min_val = max_val = None
     total_sum = total_count = 0
 
-    for *_, size in rdd.toLocalIterator():
+    for *_, size in iter_records_from_file(input_path):
         if min_val is None or size < min_val:
             min_val = size
         if max_val is None or size > max_val:
@@ -123,10 +129,10 @@ def loop_page_size_stats(rdd) -> Tuple[int, int, float]:
     return int(min_val or 0), int(max_val or 0), float(avg_val)
 
 
-def loop_image_counts(rdd) -> Tuple[int, int]:
+def loop_image_counts(input_path: str) -> Tuple[int, int]:
     total_images = non_en_images = 0
 
-    for project, title, *_ in rdd.toLocalIterator():
+    for project, title, *_ in iter_records_from_file(input_path):
         if title.lower().endswith(IMAGE_EXTENSIONS):
             total_images += 1
             if project != "en":
@@ -135,10 +141,10 @@ def loop_image_counts(rdd) -> Tuple[int, int]:
     return int(total_images), int(non_en_images)
 
 
-def loop_top_terms(rdd) -> List[Tuple[str, int]]:
+def loop_top_terms(input_path: str) -> List[Tuple[str, int]]:
     term_counts: Dict[str, int] = {}
     
-    for _, title, *_ in rdd.toLocalIterator():
+    for _, title, *_ in iter_records_from_file(input_path):
         for term in normalize_terms(title):
             term_counts[term] = term_counts.get(term, 0) + 1
 
@@ -147,10 +153,10 @@ def loop_top_terms(rdd) -> List[Tuple[str, int]]:
     return sorted_terms[:10]
 
 
-def loop_top_projects(rdd) -> List[Tuple[str, int]]:
+def loop_top_projects(input_path: str) -> List[Tuple[str, int]]:
     project_counts: Dict[str, int] = {}
 
-    for project, _, hits, _ in rdd.toLocalIterator():
+    for project, _, hits, _ in iter_records_from_file(input_path):
         project_counts[project] = project_counts.get(project, 0) + hits
 
     # Sort descending by hits and return top 5
@@ -158,10 +164,10 @@ def loop_top_projects(rdd) -> List[Tuple[str, int]]:
     return sorted_projects[:5]
 
 
-def loop_top_title_per_project_rdd(rdd):
+def loop_top_title_per_project(input_path: str):
     best: Dict[str, Tuple[str, int]] = {}
 
-    for project, title, hits, _ in rdd.toLocalIterator():
+    for project, title, hits, _ in iter_records_from_file(input_path):
         current = best.get(project)
         if current is None or hits > current[1]:
             best[project] = (title, hits)
@@ -237,7 +243,7 @@ def main() -> None:
     results: Dict[str, Dict[str, object]] = {}
 
     (mr_stats, mr_time) = time_call(mr_page_size_stats, rdd)
-    (loop_stats, loop_time) = time_call(loop_page_size_stats, rdd)
+    (loop_stats, loop_time) = time_call(loop_page_size_stats, args.input)
     results["Q1_page_size"] = {
         "title": "Q1: Min, max, and average page size",
         "mr_result": mr_stats,
@@ -247,7 +253,7 @@ def main() -> None:
     }
 
     (mr_img, mr_time) = time_call(mr_image_counts, rdd)
-    (loop_img, loop_time) = time_call(loop_image_counts, rdd)
+    (loop_img, loop_time) = time_call(loop_image_counts, args.input)
     results["Q2_images"] = {
         "title": "Q2: Image page titles and non-English count",
         "mr_result": mr_img,
@@ -257,7 +263,7 @@ def main() -> None:
     }
 
     (mr_terms, mr_time) = time_call(mr_top_terms, rdd)
-    (loop_terms, loop_time) = time_call(loop_top_terms, rdd)
+    (loop_terms, loop_time) = time_call(loop_top_terms, args.input)
     results["Q3_terms"] = {
         "title": "Q3: Top 10 terms in page titles",
         "mr_result": mr_terms,
@@ -267,7 +273,7 @@ def main() -> None:
     }
 
     (mr_projects, mr_time) = time_call(mr_top_projects, rdd)
-    (loop_projects, loop_time) = time_call(loop_top_projects, rdd)
+    (loop_projects, loop_time) = time_call(loop_top_projects, args.input)
     results["Q4_projects"] = {
         "title": "Q4: Top 5 projects by total page hits",
         "mr_result": mr_projects,
@@ -280,7 +286,7 @@ def main() -> None:
     mr_top_title_sorted = sorted(mr_top_title, key=lambda x: x[0])
 
     start = time.perf_counter()
-    loop_top_title_results = loop_top_title_per_project_rdd(rdd)
+    loop_top_title_results = loop_top_title_per_project(args.input)
     loop_time = time.perf_counter() - start
     
     # Format exactly like Spark's textFile would output
