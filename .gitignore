@@ -17,4 +17,4 @@ Thumbs.db
 .venv/
 .vscode/
 *.ipynb
-notebooks/
+notebooks/output/
