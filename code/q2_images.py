@@ -17,7 +17,7 @@ def main():
     sc = SparkContext(conf=conf)
     sc.setLogLevel("WARN")
 
-    input_path = "data/pagecounts-20160101-000000_parsed.out"
+    input_path = "../data/pagecounts-20160101-000000_parsed.out"
     rdd = sc.textFile(input_path).map(parse_line).filter(lambda x: x is not None).cache()
 
     # --- Map-Reduce Approach ---
