@@ -1,10 +1,7 @@
 import argparse
 import time
 from typing import Dict
-
 from pyspark import SparkConf, SparkContext
-
-# Import processing modules
 import mr_queries as mr
 import loop_queries as loop
 from utils import parse_line, write_report

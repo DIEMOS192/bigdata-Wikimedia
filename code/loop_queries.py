@@ -1,6 +1,6 @@
 from pyspark import AccumulatorParam
 from typing import Dict, List, Tuple
-from utils import IMAGE_EXTENSIONS, normalize_terms
+from .utils import IMAGE_EXTENSIONS, normalize_terms
 
 
 # ── Custom Accumulator Types ──────────────────────────────────────────────────

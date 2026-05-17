@@ -12,7 +12,7 @@ Spark-based analysis of Wikimedia pageview logs (Jan 1, 2016, 00:00-01:00). Each
 
 1. Compute min, max, and average page size.
 2. Count page titles ending with image extensions (.jpg, .png, .gif), and count how many are not in the English project (project code != "en").
-3. Find the top 10 most frequent terms in page titles (case-insensitive, split by "_", with normalization).
+3. Find the top 10 most frequent terms in page titles (case-insensitive, split by "\_", with normalization).
 4. Identify the top 5 projects by total page hits.
 5. For each project, find the single page title with the highest page hits.
 
@@ -50,27 +50,24 @@ Each query is implemented twice:
 Details by query:
 
 1. **Min, max, average page size**
-    - Map-reduce: aggregate sizes with a `(min, max, sum, count)` tuple.
-    - Loops: compute `(min, max, sum, count)` per partition, then reduce them.
+   - Map-reduce: aggregate sizes with a `(min, max, sum, count)` tuple.
+   - Loops: compute `(min, max, sum, count)` per partition, then reduce them.
 
 2. **Image titles + non-English count**
+   - Map-reduce: filter titles ending with `.jpg`, `.png`, `.gif`, then count total and non-English.
 
-    - Map-reduce: filter titles ending with `.jpg`, `.png`, `.gif`, then count total and non-English.
-
-    - Loops: count both values inside each partition loop, then sum them.
+   - Loops: count both values inside each partition loop, then sum them.
 
 3. **Top 10 terms in titles**
-    - Map-reduce: split titles by `_`, normalize to lowercase alphanumerics, count with `reduceByKey`, then take top 10.
-    - Loops: build a local dictionary per partition, then merge and take top 10.
+   - Map-reduce: split titles by `_`, normalize to lowercase alphanumerics, count with `reduceByKey`, then take top 10.
+   - Loops: build a local dictionary per partition, then merge and take top 10.
 
 4. **Top 5 projects by total hits**
+   - Map-reduce: `map(project, hits) -> reduceByKey(sum) -> takeOrdered(5)`.
 
-    - Map-reduce: `map(project, hits) -> reduceByKey(sum) -> takeOrdered(5)`.
-
-    - Loops: sum hits per project in each partition, then merge and take top 5.
+   - Loops: sum hits per project in each partition, then merge and take top 5.
 
 5. **Top page title per project**
+   - Map-reduce: `reduceByKey` picks the `(title, hits)` with highest hits per project.
 
-    - Map-reduce: `reduceByKey` picks the `(title, hits)` with highest hits per project.
-
-    - Loops: track best title per project inside each partition, then merge with `reduceByKey`.
+   - Loops: track best title per project inside each partition, then merge with `reduceByKey`.
