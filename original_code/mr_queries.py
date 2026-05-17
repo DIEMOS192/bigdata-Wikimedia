@@ -1,16 +1,6 @@
-import re
-from typing import List, Tuple, Iterator
+from typing import List, Tuple
+from utils import IMAGE_EXTENSIONS, normalize_terms
 
-IMAGE_EXTENSIONS = (".jpg", ".png", ".gif")
-TERM_CLEAN_RE = re.compile(r"[^a-z0-9]+")
-
-def normalize_terms(title: str) -> Iterator[str]:
-    for raw in title.split("_"):
-        cleaned = TERM_CLEAN_RE.sub("", raw.lower())
-        if cleaned:
-            yield cleaned
-
-# --- Map-reduce style implementations ---
 
 def mr_page_size_stats(rdd) -> Tuple[int, int, float]:
     sizes = rdd.map(lambda record: record[3])
