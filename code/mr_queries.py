@@ -1,5 +1,5 @@
 from typing import List, Tuple
-from code.utils import IMAGE_EXTENSIONS, normalize_terms
+from utils import IMAGE_EXTENSIONS, normalize_terms
 
 
 def mr_page_size_stats(rdd) -> Tuple[int, int, float]:
