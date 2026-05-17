@@ -47,7 +47,7 @@ def main() -> None:
 
     # Q1
     (mr_stats, mr_time) = time_call(mr.mr_page_size_stats, rdd)
-    (loop_stats, loop_time) = time_call(loop.loop_page_size_stats, args.input)
+    (loop_stats, loop_time) = time_call(loop.loop_page_size_stats, rdd, sc)
     results["Q1_page_size"] = {
         "title": "Q1: Min, max, and average page size",
         "mr_result": mr_stats,
@@ -58,7 +58,7 @@ def main() -> None:
 
     # Q2
     (mr_img, mr_time) = time_call(mr.mr_image_counts, rdd)
-    (loop_img, loop_time) = time_call(loop.loop_image_counts, args.input)
+    (loop_img, loop_time) = time_call(loop.loop_image_counts, rdd, sc)
     results["Q2_images"] = {
         "title": "Q2: Image page titles and non-English count",
         "mr_result": mr_img,
@@ -69,7 +69,7 @@ def main() -> None:
 
     # Q3
     (mr_terms, mr_time) = time_call(mr.mr_top_terms, rdd)
-    (loop_terms, loop_time) = time_call(loop.loop_top_terms, args.input)
+    (loop_terms, loop_time) = time_call(loop.loop_top_terms, rdd, sc)
     results["Q3_terms"] = {
         "title": "Q3: Top 10 terms in page titles",
         "mr_result": mr_terms,
@@ -80,7 +80,7 @@ def main() -> None:
 
     # Q4
     (mr_projects, mr_time) = time_call(mr.mr_top_projects, rdd)
-    (loop_projects, loop_time) = time_call(loop.loop_top_projects, args.input)
+    (loop_projects, loop_time) = time_call(loop.loop_top_projects, rdd, sc)
     results["Q4_projects"] = {
         "title": "Q4: Top 5 projects by total page hits",
         "mr_result": mr_projects,
@@ -94,7 +94,7 @@ def main() -> None:
     mr_top_title_sorted = sorted(mr_top_title, key=lambda x: x[0])
 
     start = time.perf_counter()
-    loop_top_title_results = loop.loop_top_title_per_project(args.input)
+    loop_top_title_results = loop.loop_top_title_per_project(rdd, sc)
     loop_time = time.perf_counter() - start
     
     loop_lines = [f"{item}" for item in loop_top_title_results]

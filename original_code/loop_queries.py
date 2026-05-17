@@ -1,63 +1,110 @@
+from pyspark import AccumulatorParam
 from typing import Dict, List, Tuple
-from utils import IMAGE_EXTENSIONS, iter_records_from_file, normalize_terms
+from utils import IMAGE_EXTENSIONS, normalize_terms
 
 
-def loop_page_size_stats(input_path: str) -> Tuple[int, int, float]:
-    min_val = max_val = None
-    total_sum = total_count = 0
+# ── Custom Accumulator Types ──────────────────────────────────────────────────
 
-    for *_, size in iter_records_from_file(input_path):
-        if min_val is None or size < min_val:
-            min_val = size
-        if max_val is None or size > max_val:
-            max_val = size
-        total_sum += size
-        total_count += 1
+class MinAccParam(AccumulatorParam):
+    def zero(self, init): return float('inf')
+    def addInPlace(self, v1, v2): return min(v1, v2)
 
-    avg_val = (total_sum / total_count) if total_count > 0 else 0.0
-    return int(min_val or 0), int(max_val or 0), float(avg_val)
+class MaxAccParam(AccumulatorParam):
+    def zero(self, init): return float('-inf')
+    def addInPlace(self, v1, v2): return max(v1, v2)
+
+class DictSumAccParam(AccumulatorParam):
+    def zero(self, init): return {}
+    def addInPlace(self, d1, d2):
+        for k, v in d2.items():
+            d1[k] = d1.get(k, 0) + v
+        return d1
+
+class DictMaxTitleAccParam(AccumulatorParam):
+    def zero(self, init): return {}
+    def addInPlace(self, d1, d2):
+        for project, (title, hits) in d2.items():
+            if project not in d1 or hits > d1[project][1]:
+                d1[project] = (title, hits)
+        return d1
 
 
-def loop_image_counts(input_path: str) -> Tuple[int, int]:
-    total_images = non_en_images = 0
+# ── Q1 ───────────────────────────────────────────────────────────────────────
 
-    for project, title, *_ in iter_records_from_file(input_path):
+def loop_page_size_stats(rdd, sc) -> Tuple[int, int, float]:
+    min_acc  = sc.accumulator(float('inf'), MinAccParam())
+    max_acc  = sc.accumulator(float('-inf'), MaxAccParam())
+    sum_acc  = sc.accumulator(0)
+    cnt_acc  = sc.accumulator(0)
+
+    def update(record):
+        size = record[3]
+        min_acc.add(size)
+        max_acc.add(size)
+        sum_acc.add(size)
+        cnt_acc.add(1)
+
+    rdd.foreach(update)
+
+    avg = (sum_acc.value / cnt_acc.value) if cnt_acc.value > 0 else 0.0
+    return int(min_acc.value), int(max_acc.value), float(avg)
+
+
+# ── Q2 ───────────────────────────────────────────────────────────────────────
+
+def loop_image_counts(rdd, sc) -> Tuple[int, int]:
+    total_acc  = sc.accumulator(0)
+    non_en_acc = sc.accumulator(0)
+
+    def update(record):
+        project, title, _, _ = record
         if title.lower().endswith(IMAGE_EXTENSIONS):
-            total_images += 1
+            total_acc.add(1)
             if project != "en":
-                non_en_images += 1
+                non_en_acc.add(1)
 
-    return int(total_images), int(non_en_images)
+    rdd.foreach(update)
+    return int(total_acc.value), int(non_en_acc.value)
 
 
-def loop_top_terms(input_path: str) -> List[Tuple[str, int]]:
-    term_counts: Dict[str, int] = {}
-    
-    for _, title, *_ in iter_records_from_file(input_path):
-        for term in normalize_terms(title):
-            term_counts[term] = term_counts.get(term, 0) + 1
+# ── Q3 ───────────────────────────────────────────────────────────────────────
 
-    sorted_terms = sorted(term_counts.items(), key=lambda item: -item[1])
+def loop_top_terms(rdd, sc) -> List[Tuple[str, int]]:
+    term_acc = sc.accumulator({}, DictSumAccParam())
+
+    def update(record):
+        local = {}
+        for term in normalize_terms(record[1]):
+            local[term] = local.get(term, 0) + 1
+        term_acc.add(local)
+
+    rdd.foreach(update)
+    sorted_terms = sorted(term_acc.value.items(), key=lambda x: -x[1])
     return sorted_terms[:10]
 
 
-def loop_top_projects(input_path: str) -> List[Tuple[str, int]]:
-    project_counts: Dict[str, int] = {}
+# ── Q4 ───────────────────────────────────────────────────────────────────────
 
-    for project, _, hits, _ in iter_records_from_file(input_path):
-        project_counts[project] = project_counts.get(project, 0) + hits
+def loop_top_projects(rdd, sc) -> List[Tuple[str, int]]:
+    proj_acc = sc.accumulator({}, DictSumAccParam())
 
-    sorted_projects = sorted(project_counts.items(), key=lambda item: -item[1])
+    def update(record):
+        proj_acc.add({record[0]: record[2]})
+
+    rdd.foreach(update)
+    sorted_projects = sorted(proj_acc.value.items(), key=lambda x: -x[1])
     return sorted_projects[:5]
 
 
-def loop_top_title_per_project(input_path: str) -> List[Tuple[str, str, int]]:
-    best: Dict[str, Tuple[str, int]] = {}
+# ── Q5 ───────────────────────────────────────────────────────────────────────
 
-    for project, title, hits, _ in iter_records_from_file(input_path):
-        current = best.get(project)
-        if current is None or hits > current[1]:
-            best[project] = (title, hits)
+def loop_top_title_per_project(rdd, sc) -> List[Tuple[str, str, int]]:
+    best_acc = sc.accumulator({}, DictMaxTitleAccParam())
 
-    result_list = [(project, title, hits) for project, (title, hits) in best.items()]
-    return sorted(result_list, key=lambda x: x[0])
+    def update(record):
+        project, title, hits, _ = record
+        best_acc.add({project: (title, hits)})
+
+    rdd.foreach(update)
+    result = [(p, t, h) for p, (t, h) in best_acc.value.items()]
+    return sorted(result, key=lambda x: x[0])
